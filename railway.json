@@ -1,0 +1,11 @@
+{
+  "build": {
+    "env": {
+      "DISCORD_TOKEN": "set-in-railway",
+      "DISCORD_CHANNEL_ID": "set-in-railway",
+      "MFL_LEAGUE_ID": "set-in-railway",
+      "MFL_YEAR": "2025"
+    }
+  },
+  "start": "python3 bot.py"
+}
