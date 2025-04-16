@@ -6,20 +6,18 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 
+# Load environment variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 LEAGUE_ID = os.getenv("LEAGUE_ID")
-SEASON_YEAR = 2025
 DRAFT_CHANNEL_ID = 1359911725327056922
-CHECK_INTERVAL = 30  # seconds
+SEASON_YEAR = 2025
+CHECK_INTERVAL = 300  # Check every 5 minutes
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
-
+posted_picks = set()
 franchise_names = {}
-announced_picks = set()
-draft_started = False
-last_announced_pick = -1
 
 async def load_franchises():
     url = f"https://www43.myfantasyleague.com/{SEASON_YEAR}/export?TYPE=league&L={LEAGUE_ID}&JSON=1"
@@ -28,49 +26,72 @@ async def load_franchises():
             data = await resp.json()
             for f in data["league"]["franchises"]["franchise"]:
                 franchise_names[f["id"]] = f["name"]
-    print(f"Loaded {len(franchise_names)} franchises.")
 
-async def fetch_draft_data():
+async def fetch_draft():
     url = f"https://www43.myfantasyleague.com/{SEASON_YEAR}/export?TYPE=draftResults&L={LEAGUE_ID}&JSON=1"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
-            return await resp.json()
+            if resp.status != 200:
+                print(f"Failed to fetch draft: HTTP {resp.status}")
+                return [], None
+            data = await resp.json()
+            draft_unit = data.get("draftResults", {}).get("draftUnit", [])
+            if not draft_unit:
+                return [], None
+            picks = draft_unit[0].get("draftPick", [])
+            start_time = draft_unit[0].get("startTime")
+            return picks, start_time
 
-async def monitor_draft():
-    global draft_started, last_announced_pick
-    await load_franchises()
+async def draft_check_loop():
     await client.wait_until_ready()
     channel = client.get_channel(DRAFT_CHANNEL_ID)
-
-    if not channel:
-        print("❌ Draft channel not found.")
+    if channel is None:
+        print("❌ ERROR: Cannot find draft channel.")
         return
 
+    await load_franchises()
+    draft_announced = False
+
     while not client.is_closed():
-        data = await fetch_draft_data()
-        draft_unit = data.get("draftResults", {}).get("draftUnit", [{}])[0]
-        picks = draft_unit.get("draftPick", [])
-        total_picks = int(draft_unit.get("totalRounds", 0)) * int(draft_unit.get("picksPerRound", 0))
+        print("Checking draft status...")
+        picks, start_time = await fetch_draft()
+        if not picks:
+            print("No draft picks found.")
+            await asyncio.sleep(CHECK_INTERVAL)
+            continue
 
-        if picks and not draft_started:
-            draft_started = True
-            await channel.send("📢 **The Draft Has Officially Started!**")
+        if not draft_announced and start_time:
+            readable_time = datetime.fromtimestamp(int(start_time)).strftime('%b %d, %Y %I:%M %p')
+            await channel.send(f"🏈 **The draft has started!** First pick scheduled for {readable_time}.\n{'-' * 40}")
+            draft_announced = True
 
-        next_pick_number = len(picks) + 1
+        for i, pick in enumerate(picks):
+            pick_id = pick["timestamp"]
+            if pick_id in posted_picks:
+                continue
 
-        if next_pick_number <= total_picks and next_pick_number != last_announced_pick:
-            next_franchise_id = draft_unit.get("franchise", [{}])[0].get("id")
-            if not next_franchise_id:
-                next_franchise_id = draft_unit.get("franchise", [{}])[0]
-            team_name = franchise_names.get(next_franchise_id, f"Franchise {next_franchise_id}")
-            await channel.send(f"⏰ **On the Clock (Pick #{next_pick_number}):** {team_name}")
-            last_announced_pick = next_pick_number
+            posted_picks.add(pick_id)
+            franchise = pick["franchise"]
+            player_name = pick.get("playerName", f"Player #{pick.get('player')}")
+            round_num = pick["round"]
+            pick_num = pick["pick"]
+
+            message = f"🏈 **Draft Pick:** {franchise_names.get(franchise, f'Franchise {franchise}')} selected {player_name} (Round {round_num}, Pick {pick_num})"
+
+            if i + 1 < len(picks):
+                on_clock = picks[i + 1]["franchise"]
+                message += f"\n🕒 On the clock: {franchise_names.get(on_clock, f'Franchise {on_clock}')}"
+            if i + 2 < len(picks):
+                on_deck = picks[i + 2]["franchise"]
+                message += f"\n📋 On deck: {franchise_names.get(on_deck, f'Franchise {on_deck}')}"
+
+            await channel.send(message + "\n" + "-" * 40)
 
         await asyncio.sleep(CHECK_INTERVAL)
 
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    client.loop.create_task(monitor_draft())
+    client.loop.create_task(draft_check_loop())
 
 client.run(DISCORD_TOKEN)
