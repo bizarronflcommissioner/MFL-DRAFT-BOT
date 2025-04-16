@@ -9,7 +9,7 @@ import os
 # Load environment variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-LEAGUE_ID = os.getenv("LEAGUE_ID")
+LEAGUE_ID = 61663
 DRAFT_CHANNEL_ID = 1359911725327056922
 SEASON_YEAR = 2025
 CHECK_INTERVAL = 300  # Check every 5 minutes
