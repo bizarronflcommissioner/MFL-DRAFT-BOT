@@ -6,13 +6,14 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 
-# Load environment variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-LEAGUE_ID = 61663
-DRAFT_CHANNEL_ID = 1359911725327056922
+LEAGUE_ID = int(os.getenv("LEAGUE_ID", 61663))
+DRAFT_CHANNEL_ID = int(os.getenv("DRAFT_CHANNEL_ID", 1359911725327056922))
 SEASON_YEAR = 2025
 CHECK_INTERVAL = 300  # Check every 5 minutes
+
+print("DISCORD_TOKEN LOADED:", DISCORD_TOKEN[:5] if DISCORD_TOKEN else "None")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -26,6 +27,7 @@ async def load_franchises():
             data = await resp.json()
             for f in data["league"]["franchises"]["franchise"]:
                 franchise_names[f["id"]] = f["name"]
+    print(f"Loaded {len(franchise_names)} franchises.")
 
 async def fetch_draft():
     url = f"https://www43.myfantasyleague.com/{SEASON_YEAR}/export?TYPE=draftResults&L={LEAGUE_ID}&JSON=1"
@@ -35,12 +37,14 @@ async def fetch_draft():
                 print(f"Failed to fetch draft: HTTP {resp.status}")
                 return [], None
             data = await resp.json()
-            draft_unit = data.get("draftResults", {}).get("draftUnit", [])
-            if not draft_unit:
+            try:
+                draft_unit = data.get("draftResults", {}).get("draftUnit", [])
+                picks = draft_unit[0].get("draftPick", [])
+                start_time = draft_unit[0].get("startTime")
+                return picks, start_time
+            except (IndexError, AttributeError) as e:
+                print(f"Error parsing draft JSON: {e}")
                 return [], None
-            picks = draft_unit[0].get("draftPick", [])
-            start_time = draft_unit[0].get("startTime")
-            return picks, start_time
 
 async def draft_check_loop():
     await client.wait_until_ready()
@@ -55,6 +59,7 @@ async def draft_check_loop():
     while not client.is_closed():
         print("Checking draft status...")
         picks, start_time = await fetch_draft()
+
         if not picks:
             print("No draft picks found.")
             await asyncio.sleep(CHECK_INTERVAL)
@@ -66,6 +71,7 @@ async def draft_check_loop():
             draft_announced = True
 
         for i, pick in enumerate(picks):
+            print(f"Pick #{i + 1}: {pick}")
             pick_id = pick["timestamp"]
             if pick_id in posted_picks:
                 continue
